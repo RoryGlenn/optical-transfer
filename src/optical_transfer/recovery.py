@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import json
 import math
 import os
@@ -20,6 +19,7 @@ from .packets import (
     hash_file,
     recover_group,
 )
+from .platform_io import is_link, lock_exclusive
 
 
 def atomic_write(path: Path, data: bytes) -> None:
@@ -42,8 +42,8 @@ class Recovery:
     """
 
     def __init__(self, root: Path) -> None:
-        if root.is_symlink():
-            raise TransferError("Recovery state must be a directory, not a symlink.")
+        if (root.exists() or root.is_symlink()) and is_link(root.lstat()):
+            raise TransferError("Recovery state must be a directory, not a link or junction.")
         root.mkdir(parents=True, exist_ok=True)
         marker = root / "optical-state.json"
         expected_marker = {"format": "optical-transfer-recovery", "version": 1}
@@ -60,12 +60,15 @@ class Recovery:
             with marker.open("x") as stream:
                 json.dump(expected_marker, stream)
         self.root = root
-        self._lock: BinaryIO = (root / ".lock").open("ab")
+        self._lock: BinaryIO = (root / ".lock").open("a+b")
         try:
-            fcntl.flock(self._lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock_exclusive(self._lock)
         except BlockingIOError as error:
             self._lock.close()
             raise TransferError("Another process is using this recovery directory.") from error
+        except BaseException:
+            self._lock.close()
+            raise
         self.digest: bytes | None = None
         self.profile = PROFILE
         self.length = 0

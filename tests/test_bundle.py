@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 import struct
 import sys
 import zipfile
@@ -9,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from optical_transfer.bundle import extract_verified, pack
+from optical_transfer.bundle import extract_verified, pack, safe_name
 from optical_transfer.cli import encode, main
 from optical_transfer.errors import TransferError
 from optical_transfer.packets import iter_packets
@@ -44,16 +45,39 @@ def test_single_file_and_empty_root(tmp_path: Path) -> None:
     assert extract_verified(tmp_path / "empty.zip", tmp_path / "empty-out") == 0
 
 
-def test_pack_rejects_symlink_collision_and_recursive_output(tmp_path: Path) -> None:
+def test_pack_rejects_symlinks(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()
-    (source / "link").symlink_to("missing")
+    try:
+        (source / "link").symlink_to("missing")
+    except OSError as error:
+        pytest.skip(f"Creating symlinks is not allowed on this host: {error}")
     with pytest.raises(TransferError):
         pack(source, tmp_path / "bad.zip")
     (source / "link").unlink()
     with pytest.raises(TransferError, match="outside"):
         pack(source, source / "bad.zip")
     # The host may use a case-insensitive filesystem; validate collisions on imported ZIP instead.
+
+
+def test_portable_binary_open_without_nofollow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+    source = tmp_path / "a spaced file 日本語.bin"
+    payload = b"before\r\nafter\x1a\0\xff" + bytes(range(256))
+    source.write_bytes(payload)
+    pack(source, tmp_path / "archive.zip")
+    extract_verified(tmp_path / "archive.zip", tmp_path / "restored")
+    assert (tmp_path / "restored" / source.name).read_bytes() == payload
+
+
+@pytest.mark.parametrize("name", ["NUL", "con.txt", "COM1.log", "LPT9", "dir/a?b", 'a"b'])
+def test_windows_destination_names_are_rejected(name: str) -> None:
+    with pytest.raises(TransferError, match="Windows filename"):
+        safe_name(name, windows=True)
+    assert safe_name(name, windows=False) == name
 
 
 @pytest.mark.parametrize("names", [["../escape"], ["/absolute"], ["a\\b"], ["A", "a"]])

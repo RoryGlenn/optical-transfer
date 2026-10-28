@@ -1,0 +1,62 @@
+name: Windows 11 compatibility
+
+on:
+  push:
+    branches: [main, windows11-iphone-support]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-11:
+    # Actual Windows 11 Arm host; x64 Python and wheels run under x64 emulation.
+    runs-on: windows-11-arm
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - name: Confirm Windows 11 and Python architecture
+        run: |
+          $os = Get-CimInstance Win32_OperatingSystem
+          $os | Select-Object Caption, Version, BuildNumber
+          if ($os.Caption -notmatch 'Windows 11') { throw 'Expected an actual Windows 11 host' }
+          python -c "import platform, struct; print(platform.platform()); print('Python bits:', struct.calcsize('P') * 8)"
+      - name: Install FFmpeg and uv
+        run: |
+          choco install ffmpeg --version=9.0.1 --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pip install uv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ffmpeg -version
+          ffprobe -version
+          ffplay -version
+      - name: Install the locked project with x64 Python
+        run: |
+          $opticalPython = (Get-Command python).Source
+          uv sync --locked --no-editable --python $opticalPython
+      - name: Lint
+        run: uv run --no-editable ruff check src tests
+      - name: Formatting
+        run: uv run --no-editable ruff format --check src tests
+      - name: Type check on Windows
+        run: uv run --no-editable mypy src
+      - name: Test native Windows APIs and both video profiles
+        run: uv run --no-editable pytest -q --junitxml=windows-results.xml
+      - name: Build distributions
+        run: uv build
+      - name: Retain verification results
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows11-verification
+          path: windows-results.xml
+          if-no-files-found: ignore
+          retention-days: 7

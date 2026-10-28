@@ -1,6 +1,8 @@
 """Checkpoint persistence, deduplication, incomplete and integrity behavior."""
 
 import random
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -60,6 +62,22 @@ def test_conflicting_packet_and_state_lock(tmp_path: Path) -> None:
             Recovery(state)
         with pytest.raises(TransferError, match="Conflicting bytes"):
             recovery.add(Packet(packet.digest, packet.length, 0, 0, b"y" * 512))
+
+
+def test_cross_process_lock_and_reacquisition(tmp_path: Path) -> None:
+    script = (
+        "import sys\nfrom pathlib import Path\n"
+        "from optical_transfer.recovery import Recovery\n"
+        "from optical_transfer.errors import TransferError\n"
+        "try:\n    with Recovery(Path(sys.argv[1])): pass\n"
+        "except TransferError:\n    sys.exit(3)\n"
+    )
+    command = [sys.executable, "-c", script, str(tmp_path / "state")]
+    with Recovery(tmp_path / "state"):
+        blocked = subprocess.run(command, capture_output=True, timeout=10)
+        assert blocked.returncode == 3, blocked.stderr
+    acquired = subprocess.run(command, capture_output=True, timeout=10)
+    assert acquired.returncode == 0, acquired.stderr
 
 
 def test_unrelated_state_directory_is_untouched(tmp_path: Path) -> None:

@@ -11,7 +11,7 @@ yet been validated.** The initial settings favor reliability over speed.
 
 ## Install
 
-Python 3.11–3.14, [uv](https://docs.astral.sh/uv/), and FFmpeg (including `ffprobe`
+Python 3.11–3.14 (use x64 Python 3.13 on Windows), [uv](https://docs.astral.sh/uv/), and FFmpeg (including `ffprobe`
 and `ffplay`) are required. Tested environments are macOS arm64 with Python 3.13
 and an Ubuntu 24.04 arm64 container with Python 3.12 and FFmpeg 6.1.1.
 
@@ -33,6 +33,66 @@ optical --help
 The installed command works from any directory and does not depend on an editable
 source import. To install an updated checkout, run
 `uv tool install --reinstall --python 3.13 .` from the project directory.
+
+## Windows 11 → iPhone recording → computer decoder
+
+The iPhone is a recorder in this workflow. Its normal Camera app saves the video;
+original files are reconstructed later on a computer running Optical Transfer.
+No iPhone decoder app or live QR scanner is required.
+
+Use **x64 Python 3.13** on Windows 11. The pinned recovery library has Windows x64
+wheels for that interpreter; an ARM-native Python installation needs a source
+build and is not the documented installation target. Install an FFmpeg build
+that includes `ffmpeg.exe`, `ffprobe.exe`, `ffplay.exe`, `libx264`, and HEVC decoding,
+and put its `bin` directory on PATH. Follow your computer's existing installation
+process. Check the executables in PowerShell:
+
+```powershell
+py -3.13 -c "import platform, struct; print(platform.machine(), struct.calcsize('P') * 8)"
+ffmpeg -version
+ffprobe -version
+ffplay -version
+```
+
+From the extracted project folder, create a local environment and install it.
+Using executables directly avoids requiring PowerShell activation scripts:
+
+```powershell
+py -3.13 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --only-binary=:all: numpy zfec==1.6.0.0 zxing-cpp==3.1.1
+.\.venv\Scripts\python.exe -m pip install .
+.\.venv\Scripts\optical.exe --help
+```
+
+Prepare a small folder, then display its transfer in a native-size window:
+
+```powershell
+.\.venv\Scripts\optical.exe encode "C:\Users\YourName\Desktop\to-send" --out "C:\Users\YourName\Desktop\prepared-transfer" --profile robust
+.\.venv\Scripts\optical.exe play "C:\Users\YourName\Desktop\prepared-transfer" --windowed
+```
+
+On the iPhone, record normal video at 1080p/30 fps for the suggested duration.
+For the first physical trial use ordinary SDR video with HDR disabled where the
+option exists. Keep the whole QR and white border in focus and visible. Copy the
+original MOV/MP4 to the decoder computer without messaging-app recompression.
+H.264 and HEVC recordings, rotation metadata, and variable frame timing have
+software tests; these tests do not reproduce physical focus or rolling shutter.
+
+On a Windows decoder, the corresponding command is:
+
+```powershell
+.\.venv\Scripts\optical.exe decode "C:\Users\YourName\Downloads\IMG_1234.MOV" --state "C:\Users\YourName\Desktop\recovery" --out "C:\Users\YourName\Desktop\restored"
+```
+
+On macOS/Linux use the same `optical decode` command with local paths. Keep the
+same recovery directory when importing additional recordings. Recovery locks use
+Windows byte-range locking or POSIX flock as appropriate. Windows junctions and
+symlinks are rejected, and Windows-reserved output filenames fail cleanly.
+
+**Physical acceptance is still pending:** record a small known folder from the
+actual Windows 11 display using the actual iPhone, decode its original video,
+and compare every recovered file hash. Repeat with handheld capture before
+relying on the path. Synthetic video or Windows CI cannot establish that result.
 
 ## Encode and record
 
@@ -219,7 +279,7 @@ recovered a standard-profile bundle on macOS from HEVC MOV with variable timesta
 rotation, mild perspective distortion, and blur. These are synthetic video
 checks, not physical camera measurements. A clean wheel installation was tested
 outside the source checkout. Profile-1 packet bytes and partial recovery caches
-from version 0.1.0 remain compatible with 0.2.0.
+from versions 0.1.0 and 0.2.0 retain the same wire profiles in 0.3.0.
 
 Windowed standard and fullscreen robust playback were also verified on an Xvfb
 virtual display in Ubuntu: FFmpeg recorded the actual player output, and the
