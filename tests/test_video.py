@@ -120,3 +120,30 @@ def test_middle_of_video_and_rotated_mov(transfer: Path, tmp_path: Path) -> None
     assert (info["width"], info["height"]) == (840, 1000)
     code, report = decode([rotated], tmp_path / "state", tmp_path / "out")
     assert code == 0 and report["result"] == "verified"
+
+
+@pytest.mark.video
+def test_hevc_mov_with_variable_frame_timing(transfer: Path, tmp_path: Path) -> None:
+    recording = tmp_path / "phone-format.mov"
+    transcode(
+        transfer / "prepared" / "transfer.mp4",
+        recording,
+        "-vf",
+        "select='not(eq(mod(n,10),0))'",
+        "-fps_mode",
+        "vfr",
+        "-c:v",
+        "libx265",
+        "-preset",
+        "ultrafast",
+        "-x265-params",
+        "log-level=error:pools=1:frame-threads=1",
+        "-tag:v",
+        "hvc1",
+        "-crf",
+        "18",
+    )
+    assert probe_video(recording)["codec"] == "hevc"
+    code, report = decode([recording], tmp_path / "state", tmp_path / "out")
+    assert code == 0 and report["result"] == "verified"
+    assert (tmp_path / "out" / "nested" / "é.bin").read_bytes() == bytes(range(256)) * 4

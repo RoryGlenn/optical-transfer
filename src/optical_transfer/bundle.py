@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import ntpath
 import os
 import shutil
 import stat
@@ -11,18 +12,27 @@ import tempfile
 import unicodedata
 import zipfile
 import zlib
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, NoReturn
 
 from .errors import TransferError
 from .packets import MAX_BUNDLE_BYTES
+from .platform_io import is_link, open_regular
 
 MAX_FILES = 10_000
 MAX_EXPANDED_BYTES = 256 * 1024 * 1024
 MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 
 
-def safe_name(value: str) -> str:
+def _windows_reserved(component: str) -> bool:
+    """Use the current Windows path checker with a Python 3.11/3.12 fallback."""
+    checker = getattr(ntpath, "isreserved", None)
+    if checker is not None:
+        return bool(checker(component))
+    return PureWindowsPath(component).is_reserved() or any(c in component for c in '<>"|?*')
+
+
+def safe_name(value: str, *, windows: bool | None = None) -> str:
     """Validate a portable relative path without silently changing its name."""
     parts = value.split("/")
     if (
@@ -34,6 +44,10 @@ def safe_name(value: str) -> str:
         or any(":" in p or p.endswith((" ", ".")) for p in parts)
     ):
         raise TransferError(f"Unsupported relative path: {value!r}")
+    is_windows = os.name == "nt" if windows is None else windows
+    if is_windows:
+        if any(_windows_reserved(p) for p in parts):
+            raise TransferError(f"Unsupported Windows filename: {value!r}")
     return value
 
 
@@ -78,11 +92,12 @@ def _validate_entries(entries: Any) -> list[dict[str, Any]]:
 
 def _inventory(source: Path) -> list[tuple[str, Path, bool]]:
     """Inspect an input tree without following symlinks or special files."""
-    if source.is_symlink():
-        raise TransferError("Symlinks are not supported.")
-    if source.is_file():
+    source_info = source.lstat()
+    if is_link(source_info):
+        raise TransferError("Symlinks and junctions are not supported.")
+    if stat.S_ISREG(source_info.st_mode):
         return [(safe_name(source.name), source, False)]
-    if not source.is_dir():
+    if not stat.S_ISDIR(source_info.st_mode):
         raise TransferError("Input must be an existing regular file or directory.")
     result: list[tuple[str, Path, bool]] = []
 
@@ -93,9 +108,10 @@ def _inventory(source: Path) -> list[tuple[str, Path, bool]]:
     for root, dirs, files in os.walk(source, followlinks=False, onerror=walk_error):
         for name in sorted(dirs + files):
             path = Path(root) / name
-            mode = path.lstat().st_mode
+            info = path.lstat()
+            mode = info.st_mode
             is_dir = stat.S_ISDIR(mode)
-            if not (is_dir or stat.S_ISREG(mode)):
+            if is_link(info) or not (is_dir or stat.S_ISREG(mode)):
                 raise TransferError(f"Unsupported link or special file: {path}")
             result.append((safe_name(path.relative_to(source).as_posix()), path, is_dir))
             if len(result) > MAX_FILES:
@@ -134,8 +150,7 @@ def pack(source: Path, destination: Path) -> list[dict[str, Any]]:
                     archive.writestr(f"payload/{name}/", b"")
                     entries.append({"path": name, "kind": "directory"})
                     continue
-                descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-                with os.fdopen(descriptor, "rb") as stream:
+                with open_regular(path) as stream:
                     before = os.fstat(stream.fileno())
                     if not stat.S_ISREG(before.st_mode):
                         raise TransferError(f"Input is no longer a regular file: {path}")
