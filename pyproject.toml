@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "optical-transfer"
+version = "0.2.0"
+description = "Record a screen with a phone and recover the files from its video."
+requires-python = ">=3.11,<3.15"
+dependencies = ["numpy>=2.1,<3", "zxing-cpp>=3.1.1,<4", "zfec==1.6.0.0"]
+
+[project.scripts]
+optical = "optical_transfer.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8,<10", "ruff>=0.11", "mypy>=1.15", "build>=1.2"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+
+[[tool.mypy.overrides]]
+module = ["zfec", "zxingcpp"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["video: exercises actual FFmpeg and QR encoding/decoding"]
